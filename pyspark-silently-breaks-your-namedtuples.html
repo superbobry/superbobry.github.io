@@ -1,0 +1,424 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link href='//fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,700,400italic' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/stylesheet/style.min.css">
+
+  <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/pygments/default.min.css">
+  <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/font-awesome/css/font-awesome.min.css">
+
+    <link href="https://superbobry.github.io/static/custom.css" rel="stylesheet">
+
+    <link href="https://superbobry.github.io/feeds/all.atom.xml" type="application/atom+xml" rel="alternate" title="The blog Atom">
+
+
+
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="HandheldFriendly" content="True" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="index, follow" />
+
+    <!-- Chrome, Firefox OS and Opera -->
+    <meta name="theme-color" content="#333">
+    <!-- Windows Phone -->
+    <meta name="msapplication-navbutton-color" content="#333">
+    <!-- iOS Safari -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<meta name="author" content="Sergei Lebedev" />
+<meta name="description" content="" />
+<meta name="keywords" content="spark, python, rant">
+<meta property="og:site_name" content="The blog"/>
+<meta property="og:title" content="PySpark silently breaks your namedtuples"/>
+<meta property="og:description" content=""/>
+<meta property="og:locale" content="en_US"/>
+<meta property="og:url" content="https://superbobry.github.io/pyspark-silently-breaks-your-namedtuples.html"/>
+<meta property="og:type" content="article"/>
+<meta property="article:published_time" content="2018-02-25 00:00:00+01:00"/>
+<meta property="article:modified_time" content=""/>
+<meta property="article:author" content="https://superbobry.github.io/author/sergei-lebedev.html">
+<meta property="article:section" content="programming"/>
+<meta property="article:tag" content="spark"/>
+<meta property="article:tag" content="python"/>
+<meta property="article:tag" content="rant"/>
+<meta property="og:image" content="static/picture.jpg">
+
+  <title>The blog &ndash; PySpark silently breaks your namedtuples</title>
+
+</head>
+<body>
+  <aside>
+    <div>
+      <a href="https://superbobry.github.io">
+        <img src="static/picture.jpg" alt="Hi." title="Hi.">
+      </a>
+      <h1><a href="https://superbobry.github.io">Hi.</a></h1>
+
+<p>I am Sergei Lebedev. I work as a machine learning engineer at <a href='https://criteo.com'>Criteo</a>. This is my blog.</p>
+
+      <ul class="social">
+        <li><a class="sc-github" href="https://github.com/superbobry" target="_blank"><i class="fa fa-github"></i></a></li>
+        <li><a class="sc-twitter" href="https://twitter.com/superbobry" target="_blank"><i class="fa fa-twitter"></i></a></li>
+      </ul>
+    </div>
+
+
+  </aside>
+  <main>
+
+
+<article class="single">
+  <header>
+    <h1 id="pyspark-silently-breaks-your-namedtuples">PySpark silently breaks your namedtuples</h1>
+    <p>
+          Posted on February 25, 2018 in <a href="https://superbobry.github.io/category/programming.html">programming</a>
+
+
+    </p>
+  </header>
+
+
+  <div>
+    <p><strong>tl;dr</strong> you might want to stay away from using namedtuples with custom
+methods in your PySpark applications.</p>
+<h2>Introduction</h2>
+<p><a href="https://spark.apache.org">PySpark</a> is a Python API for the (Apache) Spark cluster computing
+framework. It allows to write Spark applications in pure Python handling the
+Python⇄JVM interop transparently behind the scenes. In this short writeup
+we are going to explore a peculiar quirk in the current (2.2.1) PySpark
+implementation &mdash; namedtuple serialization.</p>
+<p><a href="https://docs.python.org/3/library/collections.html#collections.namedtuple"><code>collections.namedtuple</code></a> is a concise way of defining <em>data
+classes</em>, immutable classes whose sole purpose is storing a bunch of values. For
+example,</p>
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">namedtuple</span>
+
+<span class="n">Summary</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])</span>
+</pre></div>
+
+
+<p>defines the <code>Summary</code> class with two attributes <code>min</code> and <code>max</code>. The class comes
+with a constructor, equality/comparison methods, <code>__hash__</code>, <code>__str__</code>,
+<code>__repr__</code> etc. Compare this to the equivalent (modulo mutability) <code>class</code>
+version</p>
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">total_ordering</span>
+
+<span class="nd">@total_ordering</span>
+<span class="k">class</span> <span class="nc">Summary</span><span class="p">:</span>
+    <span class="vm">__slots__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">min</span><span class="p">,</span> <span class="nb">max</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">min</span> <span class="o">=</span> <span class="nb">min</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max</span> <span class="o">=</span> <span class="nb">max</span>
+
+    <span class="k">def</span> <span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">min</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">min</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">max</span>
+
+    <span class="k">def</span> <span class="fm">__lt__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">min</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">max</span><span class="p">)</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">other</span><span class="o">.</span><span class="n">min</span><span class="p">,</span> <span class="n">other</span><span class="o">.</span><span class="n">max</span><span class="p">)</span>
+
+    <span class="c1"># __hash__, __str__, __repr__</span>
+</pre></div>
+
+
+<p>Replacing all this boilerplate with just a single line is so convenient that
+people often use <code>namedtuple</code> to create a base class and then add some methods
+on top. In case of <code>Summary</code>, we could, for example, define a method <code>combine</code>,
+combining two instances into a single one:</p>
+<div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Summary</span><span class="p">(</span><span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])):</span>
+    <span class="k">def</span> <span class="nf">combine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Summary</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">min</span><span class="p">,</span> <span class="n">other</span><span class="o">.</span><span class="n">min</span><span class="p">),</span>
+                       <span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max</span><span class="p">,</span> <span class="n">other</span><span class="o">.</span><span class="n">max</span><span class="p">))</span>
+</pre></div>
+
+
+<p>Newer Python versions (≥ 3.6) come with a different way to define namedtuples
+&mdash; <code>typing.NamedTuple</code>. Unlike the <code>collections</code> one, it uses a more
+natural class-based syntax and therefore does not require an extra layer of
+inheritance to define methods. In the following, we'll be using the
+<code>typing</code> powered implementation of <code>Summary</code>.</p>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">typing</span>
+
+<span class="k">class</span> <span class="nc">Summary</span><span class="p">(</span><span class="n">typing</span><span class="o">.</span><span class="n">NamedTuple</span><span class="p">):</span>
+    <span class="nb">min</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="nb">max</span><span class="p">:</span> <span class="nb">int</span>
+
+    <span class="k">def</span> <span class="nf">combine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">Summary</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">min</span><span class="p">,</span> <span class="n">other</span><span class="o">.</span><span class="n">min</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max</span><span class="p">,</span> <span class="n">other</span><span class="o">.</span><span class="n">max</span><span class="p">))</span>
+</pre></div>
+
+
+<p>Namedtuples are widespread in the Python ecosystem. Pretty much every Python
+project has at least a single namedtuple either defined directly in the project
+or coming from third-party libraries (<a href="https://github.com/python/cpython/search?l=Python&amp;q=namedtuple&amp;type=&amp;utf8=%E2%9C%93">including</a> the
+standard library).</p>
+<h2>The problem</h2>
+<p>Now that we've covered namedtuples, let's bring PySpark into the picture. Assume
+we have summarized each partition of an RDD of integer numbers</p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">parallelize</span><span class="p">([</span><span class="n">Summary</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">Summary</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">6</span><span class="p">)],</span> <span class="n">numSlices</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</pre></div>
+
+
+<p>and now want to combine the summaries via <a href="http://spark.apache.org/docs/2.2.1/api/python/pyspark.html#pyspark.RDD.reduce"><code>RDD.reduce</code></a></p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span><span class="o">.</span><span class="n">reduce</span><span class="p">(</span><span class="k">lambda</span> <span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">:</span> <span class="n">s1</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">s2</span><span class="p">))</span>
+<span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+  <span class="n">File</span> <span class="s2">&quot;&lt;stdin&gt;&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">1</span><span class="p">,</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+  <span class="n">File</span> <span class="s2">&quot;[...]/python/pyspark/rdd.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">837</span><span class="p">,</span> <span class="ow">in</span> <span class="nb">reduce</span>
+    <span class="k">return</span> <span class="nb">reduce</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">vals</span><span class="p">)</span>
+  <span class="n">File</span> <span class="s2">&quot;&lt;stdin&gt;&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">1</span><span class="p">,</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="k">lambda</span><span class="o">&gt;</span>
+<span class="ne">AttributeError</span><span class="p">:</span> <span class="s1">&#39;Summary&#39;</span> <span class="nb">object</span> <span class="n">has</span> <span class="n">no</span> <span class="n">attribute</span> <span class="s1">&#39;combine&#39;</span>
+</pre></div>
+
+
+<p>Oops. What happened here? The <code>Summary</code> class must have the <code>combine</code> method,
+after all, we have just defined it...</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="s2">&quot;combine&quot;</span> <span class="ow">in</span> <span class="nb">dir</span><span class="p">(</span><span class="n">s</span><span class="p">))</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="p">[</span><span class="bp">False</span><span class="p">,</span> <span class="bp">False</span><span class="p">]</span>
+</pre></div>
+
+
+<p>yet for some reason, it is not available to PySpark. What could've gone wrong?
+To answer this question we'd resort to the old-school <code>print</code> debugging
+strategy.</p>
+<h2>Down the <code>print</code> hole</h2>
+<p>The <code>AttributeError</code> we just got clearly indicates the cause of the failure
+&mdash; the <code>combine</code> method is not there. What if PySpark somehow transformed
+the <code>Summary</code> class, so that the executors actually got its different version?
+As crazy as it sounds it's worth checking out.</p>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">print_and_combine</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">):</span>
+    <span class="k">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">s1</span><span class="p">),</span> <span class="nb">type</span><span class="p">(</span><span class="n">s2</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">s1</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">s2</span><span class="p">)</span>
+</pre></div>
+
+
+<p>Plugging <code>print_and_combine</code> into the <code>reduce</code> call we get</p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span><span class="o">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">print_and_combine</span><span class="p">)</span>
+<span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">Summary</span><span class="s1">&#39;&gt; &lt;class &#39;</span><span class="n">collections</span><span class="o">.</span><span class="n">Summary</span><span class="s1">&#39;&gt;</span>
+<span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+  <span class="o">...</span>
+<span class="ne">AttributeError</span><span class="p">:</span> <span class="s1">&#39;Summary&#39;</span> <span class="nb">object</span> <span class="n">has</span> <span class="n">no</span> <span class="n">attribute</span> <span class="s1">&#39;combine&#39;</span>
+</pre></div>
+
+
+<p>Hmmm... not getting any better, <code>collections.Summary</code>? What is this
+<code>collections</code> module? We never created one, and even if had, the <code>Summary</code> class
+had been defined in the interpreter and therefore should have <code>__main__</code>
+as its module. So, what's going on?</p>
+<p>I must warn you, the answer is not pretty.</p>
+<p>To execute <code>rdd.reduce</code> call PySpark creates a task (in fact multiple tasks) for
+each RDD partition. The tasks are then serialized and sent to the executors
+to be executed. The default serializer in PySpark is
+<a href="https://github.com/apache/spark/blob/branch-2.2/python/pyspark/serializers.py#L439"><code>PickleSerializer</code></a>
+which delegates all of the work to the infamous <code>pickle</code> module. The pickle
+protocol is <a href="https://docs.python.org/3/library/pickle.html#pickling-class-instances">extensible</a> and allows to customize pickling
+(serialization) and unpickling (deserialization) for instances of any class.
+If the class does not define any custom behaviour it will use the default
+pickling mechanism, which is to export the name of the class and the instance
+dict. This is exactly how namedtuples are serialized</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">pickle</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">Summary</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+<span class="sa">b</span><span class="s1">&#39;</span><span class="se">\x80\x03</span><span class="s1">c__main__</span><span class="se">\n</span><span class="s1">Summary</span><span class="se">\n</span><span class="s1">q</span><span class="se">\x00</span><span class="s1">K</span><span class="se">\x00</span><span class="s1">K</span><span class="se">\x00\x86</span><span class="s1">q</span><span class="se">\x01\x81</span><span class="s1">q</span><span class="se">\x02</span><span class="s1">.&#39;</span>
+</pre></div>
+
+
+<p>The problem with the default mechanism in the PySpark case is that in
+order to unpickle <code>Summary</code> on the executors we need the <code>Summary</code> class to be
+defined in the <code>__main__</code> module within the executors' interpreter. This is
+where things get dirty. In fact, the above snippet was produced outside of
+PySpark. If you run it on the PySpark driver you'd get a different output</p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">Summary</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+<span class="sa">b</span><span class="s1">&#39;</span><span class="se">\x80\x03</span><span class="s1">cpyspark.serializers</span><span class="se">\n</span><span class="s1">_restore</span><span class="se">\n</span><span class="s1">q</span><span class="se">\x00</span><span class="s1">X</span><span class="se">\x05\x00\x00\x00</span><span class="s1">Summaryq</span><span class="se">\x01</span><span class="s1">X</span><span class="se">\x07\x00\x00\x00</span><span class="s1">count_aq</span><span class="se">\x02</span><span class="s1">X</span><span class="se">\x07\x00\x00\x00</span><span class="s1">count_bq</span><span class="se">\x03\x86</span><span class="s1">q</span><span class="se">\x04</span><span class="s1">K</span><span class="se">\x00</span><span class="s1">K</span><span class="se">\x00\x86</span><span class="s1">q</span><span class="se">\x05\x87</span><span class="s1">q</span><span class="se">\x06</span><span class="s1">Rq</span><span class="se">\x07</span><span class="s1">.&#39;</span>
+</pre></div>
+
+
+<p>WAT. WAT? WAT!</p>
+<h2>The patch</h2>
+<p>At import time PySpark
+<a href="https://github.com/apache/spark/blob/branch-2.2/python/pyspark/serializers.py#L375">patches</a>
+<code>collections.namedtuple</code> to have a custom implementation of the pickle protocol
+which exposes the name of the class, <strong>the field names</strong> and the corresponding
+values. This change makes all namedtuple instances picklable in an
+easy-to-unpickle format. To unpickle a namedtuple instance, the executor would
+have to</p>
+<ol>
+<li>recreate the corresponding <code>namedtuple</code> from the class and field names,</li>
+<li>instantiate the class with field values.</li>
+</ol>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">load_namedtuple</span><span class="p">(</span><span class="n">cls_name</span><span class="p">,</span> <span class="n">field_names</span><span class="p">,</span> <span class="n">field_values</span><span class="p">):</span>
+    <span class="bp">cls</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="n">cls_name</span><span class="p">,</span> <span class="n">field_names</span><span class="p">)</span>
+    <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="o">*</span><span class="n">field_values</span><span class="p">)</span>
+</pre></div>
+
+
+<p>Therefore, during the execution of the <code>reduce</code> call the executors indeed use a
+different version of the <code>Summary</code> class. Specifically, it does not have the
+<code>combine</code> method.</p>
+<h3>Sidenote #1</h3>
+<p>The way PySpark makes this happen is interesting. Instead of swapping
+<code>collections.namedtuple</code> for their custom implementation and making the change
+obvious to the users</p>
+<div class="highlight"><pre><span></span><span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span> <span class="o">=</span> <span class="n">pyspark_namedtuple</span>
+</pre></div>
+
+
+<p>PySpark does this</p>
+<div class="highlight"><pre><span></span><span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="vm">__code__</span> <span class="o">=</span> <span class="n">pyspark_namedtuple</span><span class="o">.</span><span class="vm">__code__</span>
+</pre></div>
+
+
+<p>which hides the change and makes debugging notoriously hard. The only visible
+artefact of the patching is the <code>__module__</code> attribute of the created
+namedtuples</p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])</span>
+<span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">Summary</span><span class="s1">&#39;&gt;</span>
+</pre></div>
+
+
+<h4>Why patch the <code>__code__</code>?</h4>
+<p>The <a href="https://github.com/apache/spark/pull/1623">PR</a> introducing the patch initially implemented a
+cleaner approach without <code>__code__</code> hacking, however, one of the reviewers
+pointed out that if <code>pyspark</code> is imported <strong>after</strong> <code>collections.namedtuple</code>,
+the patch would have no effect:</p>
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">namedtuple</span>
+<span class="kn">import</span> <span class="nn">pyspark</span>
+
+<span class="n">Summary</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</pre></div>
+
+
+<h4>Why does <code>Summary</code> have <code>collections</code> as <code>__module__</code>?</h4>
+<p>This happens because <code>namedtuple</code> dynamically <a href="https://github.com/python/cpython/blob/master/Lib/collections/__init__.py#L473">infers</a>
+the value of <code>__module__</code> from the frame preceding the <code>namedtuple</code> call in the
+stack. Without the patch the frame points to the module calling
+<code>collections.namedtuple</code> (for example, <code>__main__</code> if called from the
+interpreter). With the patch however, there is an
+<a href="https://github.com/apache/spark/blob/7a2ada223e14d09271a76091be0338b2d375081e/python/pyspark/serializers.py#L513">extra</a> function call from inside the <code>collections</code>
+module.</p>
+<p>The <code>typing.NamedTuple</code> version is not affected by this quirk because a class
+definition has the correct <code>__module__</code> set at class compilation time.</p>
+<h3>Sidenote #2:</h3>
+<p>The patch makes the pickled representation of <strong>every</strong> namedtuple instance
+redundant, since it puts the field names alongside the values. Despite the
+<a href="https://github.com/apache/spark/blob/branch-2.2/python/pyspark/serializers.py#L427">misleading comment</a>
+in the PySpark source code, namedtuples defined in third-party modules are also
+affected.</p>
+<div class="highlight"><pre><span></span><span class="c1"># On the driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="kn">from</span> <span class="nn">urllib.robotparser</span> <span class="kn">import</span> <span class="n">RequestRate</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">RequestRate</span><span class="p">(</span><span class="n">requests</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">))</span>
+<span class="sa">b</span><span class="s1">&#39;</span><span class="se">\x80\x03</span><span class="s1">cpyspark.serializers</span><span class="se">\n</span><span class="s1">_restore</span><span class="se">\n</span><span class="s1">q</span><span class="se">\x00</span><span class="s1">X</span><span class="se">\x0b\x00\x00\x00</span><span class="s1">RequestRateq</span><span class="se">\x01</span><span class="s1">X</span><span class="se">\x08\x00\x00\x00</span><span class="s1">requestsq</span><span class="se">\x02</span><span class="s1">X</span><span class="se">\x07\x00\x00\x00</span><span class="s1">secondsq</span><span class="se">\x03\x86</span><span class="s1">q</span><span class="se">\x04</span><span class="s1">K</span><span class="se">\x01</span><span class="s1">K&lt;</span><span class="se">\x86</span><span class="s1">q</span><span class="se">\x05\x87</span><span class="s1">q</span><span class="se">\x06</span><span class="s1">Rq</span><span class="se">\x07</span><span class="s1">.&#39;</span>
+</pre></div>
+
+
+<h3>Sidenote #3:</h3>
+<p>Normal (non-namedtuple) classes defined in the interpreter cannot be distributed
+within PySpark. Attempting to do so would lead to unhelpful, hard-to-understand
+errors</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="k">class</span> <span class="nc">Dummy</span><span class="p">:</span> <span class="k">pass</span>
+<span class="o">...</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">sc</span><span class="o">.</span><span class="n">parallelize</span><span class="p">([</span><span class="n">Dummy</span><span class="p">()])</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">d</span><span class="p">:</span> <span class="n">d</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="mi">8</span><span class="o">/</span><span class="mo">02</span><span class="o">/</span><span class="mi">24</span> <span class="mi">21</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">17</span> <span class="n">WARN</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">TaskSetManager</span><span class="p">:</span> <span class="n">Lost</span> <span class="n">task</span> <span class="mf">3.0</span> <span class="ow">in</span> <span class="n">stage</span> <span class="mf">1.0</span> <span class="p">(</span><span class="n">TID</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">24</span><span class="o">-</span><span class="mi">8</span><span class="n">a</span><span class="o">-</span><span class="mo">07</span><span class="o">-</span><span class="n">c4</span><span class="o">-</span><span class="n">b9</span><span class="o">-</span><span class="mf">10.</span><span class="n">pa4</span><span class="o">.</span><span class="n">hpc</span><span class="o">.</span><span class="n">criteo</span><span class="o">.</span><span class="n">preprod</span><span class="p">,</span> <span class="n">executor</span> <span class="mi">2</span><span class="p">):</span> <span class="n">org</span><span class="o">.</span><span class="n">apache</span><span class="o">.</span><span class="n">spark</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">PythonException</span><span class="p">:</span> <span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+  <span class="o">...</span>
+<span class="ne">AttributeError</span><span class="p">:</span> <span class="n">Can</span><span class="s1">&#39;t get attribute &#39;</span><span class="n">Dummy</span><span class="s1">&#39; on &lt;module &#39;</span><span class="n">pyspark</span><span class="o">.</span><span class="n">daemon</span><span class="s1">&#39; from &#39;</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">/</span><span class="n">pyspark</span><span class="o">.</span><span class="n">zip</span><span class="o">/</span><span class="n">pyspark</span><span class="o">/</span><span class="n">daemon</span><span class="o">.</span><span class="n">py</span><span class="s1">&#39;&gt;</span>
+</pre></div>
+
+
+<h2>Finale</h2>
+<p>Is the patch necessary? It's hard to say. On the one hand, it makes pickling
+"just work" for 99% of the use-cases which are namedtuples with no methods. On
+the other:</p>
+<ul>
+<li>it incurs a performance penalty,</li>
+<li>it does the <strong>wrong</strong> thing for namedtuples with custom methods,</li>
+<li>it complicates the debugging by patching the <code>__code__</code>/<code>__globals__</code> of
+  <code>collections.namedtuple</code>.</li>
+</ul>
+<p>As a PySpark user I would prefer for it to be at the minimum opt-in, and
+clearly documented, or better yet &mdash; removed entirely from the codebase.</p>
+<h2>P. S.</h2>
+<p>There is a way to easily undo the patch for namedtuples defined in modules (as
+opposed to the interpreter). These could be safely pickled/unpickled by the
+default implementation, so there is no reason to tolerate the performance drop
+introduced by PySpark.</p>
+<div class="highlight"><pre><span></span><span class="n">Summary</span> <span class="o">=</span> <span class="n">Summary</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])</span>
+<span class="n">Summary</span><span class="o">.</span><span class="vm">__module__</span> <span class="o">=</span> <span class="vm">__name__</span>  <span class="c1"># Only needed for ``collections.namedtuple``.</span>
+<span class="k">del</span> <span class="n">Summary</span><span class="o">.</span><span class="n">__reduce__</span>
+</pre></div>
+
+
+<h2>Links</h2>
+<ul>
+<li><a href="https://www.reddit.com/r/apachespark/comments/804rsf/pyspark_silently_breaks_your_namedtuples">Discussion</a> on /r/apachespark.</li>
+<li>Related reports in the PySpark JIRA:
+  <a href="https://issues.apache.org/jira/browse/SPARK-22674">SPARK-22674</a> and
+  <a href="https://issues.apache.org/jira/browse/SPARK-22338">SPARK-22338</a>.</li>
+</ul>
+  </div>
+  <div class="tag-cloud">
+    <p>
+      <a href="https://superbobry.github.io/tag/spark.html">spark</a>
+      <a href="https://superbobry.github.io/tag/python.html">python</a>
+      <a href="https://superbobry.github.io/tag/rant.html">rant</a>
+    </p>
+  </div>
+
+
+
+
+<div id="disqus_thread"></div>
+<script type="text/javascript">
+    var disqus_shortname = 'superbobry';
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>
+        Please enable JavaScript to view comments.
+
+</noscript>
+</article>
+
+    <footer>
+<p>
+  &copy; Sergei Lebedev 2018 - This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>
+</p>
+<p>    Powered by <a href="http://getpelican.com" target="_blank">Pelican</a> - <a href="https://github.com/alexandrevicenzi/flex" target="_blank">Flex</a> theme by <a href="http://alexandrevicenzi.com" target="_blank">Alexandre Vicenzi</a>
+</p><p>
+  <a rel="license"
+     href="http://creativecommons.org/licenses/by-sa/4.0/"
+     target="_blank">
+    <img alt="Creative Commons License"
+         title="Creative Commons License"
+         style="border-width:0"
+         src="https://i.creativecommons.org/l/by-sa/4.0/80x15.png"
+         width="80"
+         height="15"/>
+  </a>
+</p>    </footer>
+  </main>
+
+
+
+
+
+<script type="application/ld+json">
+{
+  "@context" : "http://schema.org",
+  "@type" : "Blog",
+  "name": " The blog ",
+  "url" : "https://superbobry.github.io",
+  "image": "static/picture.jpg",
+  "description": "Sergei Lebedev's Thoughts and Writings"
+}
+</script>
+</body>
+</html>
