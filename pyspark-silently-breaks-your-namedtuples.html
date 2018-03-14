@@ -11,7 +11,6 @@
 
     <link href="https://superbobry.github.io/static/custom.css" rel="stylesheet">
 
-    <link href="https://superbobry.github.io/feeds/all.atom.xml" type="application/atom+xml" rel="alternate" title="The blog Atom">
 
 
 
@@ -208,8 +207,8 @@ As crazy as it sounds it's worth checking out.</p>
 
 <p>Hmmm... not getting any better, <code>collections.Summary</code>? What is this
 <code>collections</code> module? We never created one, and even if had, the <code>Summary</code> class
-had been defined in the interpreter and therefore should have <code>__main__</code>
-as its module. So, what's going on?</p>
+had been defined in the REPL and therefore should have <code>__main__</code> as its
+module. So, what's going on?</p>
 <p>I must warn you, the answer is not pretty.</p>
 <p>To execute <code>rdd.reduce</code> call PySpark creates a task (in fact multiple tasks) for
 each RDD partition. The tasks are then serialized and sent to the executors
@@ -244,7 +243,7 @@ PySpark. If you run it on the PySpark driver you'd get a different output</p>
 <a href="https://github.com/apache/spark/blob/branch-2.2/python/pyspark/serializers.py#L375">patches</a>
 <code>collections.namedtuple</code> to have a custom implementation of the pickle protocol
 which exposes the name of the class, <strong>the field names</strong> and the corresponding
-values. This change makes all namedtuple instances picklable in an
+values. This change makes all namedtuple instances pickleable in an
 easy-to-unpickle format. To unpickle a namedtuple instance, the executor would
 have to</p>
 <ol>
@@ -304,7 +303,7 @@ interpreter). With the patch however, there is an
 module.</p>
 <p>The <code>typing.NamedTuple</code> version is not affected by this quirk because a class
 definition has the correct <code>__module__</code> set at class compilation time.</p>
-<h3>Sidenote #2:</h3>
+<h3>Sidenote #2</h3>
 <p>The patch makes the pickled representation of <strong>every</strong> namedtuple instance
 redundant, since it puts the field names alongside the values. Despite the
 <a href="https://github.com/apache/spark/blob/branch-2.2/python/pyspark/serializers.py#L427">misleading comment</a>
@@ -317,14 +316,13 @@ affected.</p>
 </pre></div>
 
 
-<h3>Sidenote #3:</h3>
-<p>Normal (non-namedtuple) classes defined in the interpreter cannot be distributed
-within PySpark. Attempting to do so would lead to unhelpful, hard-to-understand
-errors</p>
+<h3>Sidenote #3</h3>
+<p>Normal (non-namedtuple) classes defined in the REPL cannot be distributed within
+PySpark. Attempting to do so would lead to unhelpful, hard-to-understand errors</p>
 <div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="k">class</span> <span class="nc">Dummy</span><span class="p">:</span> <span class="k">pass</span>
 <span class="o">...</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">sc</span><span class="o">.</span><span class="n">parallelize</span><span class="p">([</span><span class="n">Dummy</span><span class="p">()])</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">d</span><span class="p">:</span> <span class="n">d</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
-<span class="mi">8</span><span class="o">/</span><span class="mo">02</span><span class="o">/</span><span class="mi">24</span> <span class="mi">21</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">17</span> <span class="n">WARN</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">TaskSetManager</span><span class="p">:</span> <span class="n">Lost</span> <span class="n">task</span> <span class="mf">3.0</span> <span class="ow">in</span> <span class="n">stage</span> <span class="mf">1.0</span> <span class="p">(</span><span class="n">TID</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">24</span><span class="o">-</span><span class="mi">8</span><span class="n">a</span><span class="o">-</span><span class="mo">07</span><span class="o">-</span><span class="n">c4</span><span class="o">-</span><span class="n">b9</span><span class="o">-</span><span class="mf">10.</span><span class="n">pa4</span><span class="o">.</span><span class="n">hpc</span><span class="o">.</span><span class="n">criteo</span><span class="o">.</span><span class="n">preprod</span><span class="p">,</span> <span class="n">executor</span> <span class="mi">2</span><span class="p">):</span> <span class="n">org</span><span class="o">.</span><span class="n">apache</span><span class="o">.</span><span class="n">spark</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">PythonException</span><span class="p">:</span> <span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+<span class="mi">8</span><span class="o">/</span><span class="mo">02</span><span class="o">/</span><span class="mi">24</span> <span class="mi">21</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">17</span> <span class="n">WARN</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">TaskSetManager</span><span class="p">:</span> <span class="n">Lost</span> <span class="n">task</span> <span class="mf">3.0</span> <span class="ow">in</span> <span class="n">stage</span> <span class="mf">1.0</span> <span class="p">(</span><span class="n">TID</span> <span class="mi">5</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">executor</span> <span class="mi">2</span><span class="p">):</span> <span class="n">org</span><span class="o">.</span><span class="n">apache</span><span class="o">.</span><span class="n">spark</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">PythonException</span><span class="p">:</span> <span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
   <span class="o">...</span>
 <span class="ne">AttributeError</span><span class="p">:</span> <span class="n">Can</span><span class="s1">&#39;t get attribute &#39;</span><span class="n">Dummy</span><span class="s1">&#39; on &lt;module &#39;</span><span class="n">pyspark</span><span class="o">.</span><span class="n">daemon</span><span class="s1">&#39; from &#39;</span><span class="p">[</span><span class="o">...</span><span class="p">]</span><span class="o">/</span><span class="n">pyspark</span><span class="o">.</span><span class="n">zip</span><span class="o">/</span><span class="n">pyspark</span><span class="o">/</span><span class="n">daemon</span><span class="o">.</span><span class="n">py</span><span class="s1">&#39;&gt;</span>
 </pre></div>
@@ -344,10 +342,10 @@ the other:</p>
 clearly documented, or better yet &mdash; removed entirely from the codebase.</p>
 <h2>P. S.</h2>
 <p>There is a way to easily undo the patch for namedtuples defined in modules (as
-opposed to the interpreter). These could be safely pickled/unpickled by the
+opposed to the REPL). These could be safely pickled/unpickled by the
 default implementation, so there is no reason to tolerate the performance drop
 introduced by PySpark.</p>
-<div class="highlight"><pre><span></span><span class="n">Summary</span> <span class="o">=</span> <span class="n">Summary</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])</span>
+<div class="highlight"><pre><span></span><span class="n">Summary</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s2">&quot;Summary&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">])</span>
 <span class="n">Summary</span><span class="o">.</span><span class="vm">__module__</span> <span class="o">=</span> <span class="vm">__name__</span>  <span class="c1"># Only needed for ``collections.namedtuple``.</span>
 <span class="k">del</span> <span class="n">Summary</span><span class="o">.</span><span class="n">__reduce__</span>
 </pre></div>

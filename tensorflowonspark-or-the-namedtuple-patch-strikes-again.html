@@ -1,0 +1,348 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link href='//fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,700,400italic' rel='stylesheet' type='text/css'>
+
+    <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/stylesheet/style.min.css">
+
+  <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/pygments/default.min.css">
+  <link rel="stylesheet" type="text/css" href="https://superbobry.github.io/theme/font-awesome/css/font-awesome.min.css">
+
+    <link href="https://superbobry.github.io/static/custom.css" rel="stylesheet">
+
+
+
+
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="HandheldFriendly" content="True" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="index, follow" />
+
+    <!-- Chrome, Firefox OS and Opera -->
+    <meta name="theme-color" content="#333">
+    <!-- Windows Phone -->
+    <meta name="msapplication-navbutton-color" content="#333">
+    <!-- iOS Safari -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<meta name="author" content="Sergei Lebedev" />
+<meta name="description" content="" />
+<meta name="keywords" content="spark, tensorflow, python, rant">
+<meta property="og:site_name" content="The blog"/>
+<meta property="og:title" content="TensorFlowOnSpark or the namedtuple patch strikes again!"/>
+<meta property="og:description" content=""/>
+<meta property="og:locale" content="en_US"/>
+<meta property="og:url" content="https://superbobry.github.io/tensorflowonspark-or-the-namedtuple-patch-strikes-again.html"/>
+<meta property="og:type" content="article"/>
+<meta property="article:published_time" content="2018-03-14 00:00:00+01:00"/>
+<meta property="article:modified_time" content=""/>
+<meta property="article:author" content="https://superbobry.github.io/author/sergei-lebedev.html">
+<meta property="article:section" content="programming"/>
+<meta property="article:tag" content="spark"/>
+<meta property="article:tag" content="tensorflow"/>
+<meta property="article:tag" content="python"/>
+<meta property="article:tag" content="rant"/>
+<meta property="og:image" content="static/picture.jpg">
+
+  <title>The blog &ndash; TensorFlowOnSpark or the namedtuple patch strikes again!</title>
+
+</head>
+<body>
+  <aside>
+    <div>
+      <a href="https://superbobry.github.io">
+        <img src="static/picture.jpg" alt="Hi." title="Hi.">
+      </a>
+      <h1><a href="https://superbobry.github.io">Hi.</a></h1>
+
+<p>I am Sergei Lebedev. I work as a machine learning engineer at <a href='https://criteo.com'>Criteo</a>. This is my blog.</p>
+
+      <ul class="social">
+        <li><a class="sc-github" href="https://github.com/superbobry" target="_blank"><i class="fa fa-github"></i></a></li>
+        <li><a class="sc-twitter" href="https://twitter.com/superbobry" target="_blank"><i class="fa fa-twitter"></i></a></li>
+      </ul>
+    </div>
+
+
+  </aside>
+  <main>
+
+
+<article class="single">
+  <header>
+    <h1 id="tensorflowonspark-or-the-namedtuple-patch-strikes-again">TensorFlowOnSpark or the namedtuple patch strikes again!</h1>
+    <p>
+          Posted on March 14, 2018 in <a href="https://superbobry.github.io/category/programming.html">programming</a>
+
+
+    </p>
+  </header>
+
+
+  <div>
+    <p>This blog post continues the exploration of the edge cases of the namedtuple
+patch in PySpark. If you are lost or just want to catch up on the context, have
+a look at <a href="https://superbobry.github.io/pyspark-silently-breaks-your-namedtuples.html">"PySpark silently breaks your namedtuples"</a>.</p>
+<p><strong>tl;dr</strong> PySpark patches <code>collections.namedtuple</code> to make namedtuples
+pickleable. However, the current implementation does not work well in the
+presence of inheritance, and could break third-party code in arbitrary
+ways. For example, it breaks TensorFlow when used via TensorFlowOnSpark.</p>
+<h2>Introduction</h2>
+<p><a href="https://github.com/yahoo/TensorFlowOnSpark">TensorFlowOnSpark</a> is a Python library for distributing the
+training and inference of TensorFlow models using Spark. If you are familiar
+with the way distributed TensorFlow works, you might be surprised: "Why use
+Spark at all?". The answer is out of scope of this blogpost, so if you are truly
+wondering the project <a href="https://github.com/yahoo/TensorFlowOnSpark#why-tensorflowonspark"><code>README</code></a> lists some of the reasons
+for bridging the two.</p>
+<p>In the following, we will look at how TensorFlow is affected by the Pyspark
+namedtuple patch, and what we can do about it.</p>
+<p>How does TensorFlowOnSpark work? Roughly, to launch a distributed training,</p>
+<ol>
+<li>TensorFlowOnSpark first delegates to Spark to allocate and setup
+   driver/executors.</li>
+<li>Then it creates a fake RDD with a single partition for each executor,
+   and dispatches the <code>train</code> function via <code>foreachPartition</code>.</li>
+<li>Finally, the <code>train</code> function configures the environment for starting a
+   TensorFlow worker (or a parameter server), and calls the user code.</li>
+</ol>
+<p>which can be summarized in a one-liner</p>
+<div class="highlight"><pre><span></span><span class="n">sc</span><span class="o">.</span><span class="n">parallelize</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">num_executors</span><span class="p">),</span> <span class="n">numSlices</span><span class="o">=</span><span class="n">num_executors</span><span class="p">)</span> \
+    <span class="o">.</span><span class="n">foreachPartition</span><span class="p">(</span><span class="n">train</span><span class="p">(</span><span class="o">...</span><span class="p">))</span>
+</pre></div>
+
+
+<p>Since our goal is not to explore the internals of TensorFlowOnSpark, we will
+leave TensorFlowOnSpark out of the picture, and will instead use the one-liner
+with custom code in place of the <code>train</code> function. That said, most of our
+findings apply to any PySpark application using TensorFlowOnSpark.</p>
+<h2>The problem</h2>
+<p><a href="https://www.tensorflow.org/get_started/feature_columns">Feature columns</a> is one of the higher level APIs for defining
+machine learning models in TensorFlow. The goal of feature columns is to
+transform and preprocess the raw data before plugging it into the model.
+A trivial identity model using just a single feature column might look something
+like:</p>
+<div class="highlight"><pre><span></span><span class="c1"># Unless indicated otherwise, all the code is executed on the PySpark driver.</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">tensorflow</span> <span class="kn">as</span> <span class="nn">tf</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="k">def</span> <span class="nf">identity</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">feature_columns</span><span class="p">):</span>
+<span class="o">...</span>     <span class="k">return</span> <span class="n">tf</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">input_layer</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">feature_columns</span><span class="p">)</span>
+<span class="o">...</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">features</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">42</span><span class="p">]}</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">feature_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">tf</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">numeric_column</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">)]</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">model</span> <span class="o">=</span> <span class="n">identity</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">feature_columns</span><span class="p">)</span>
+</pre></div>
+
+
+<p>We can <em>run</em> the model and verify that the produced result is indeed the value
+of <code>"x"</code>:</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="k">with</span> <span class="n">tf</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span> <span class="k">as</span> <span class="n">sess</span><span class="p">:</span>
+<span class="o">...</span>     <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+<span class="o">...</span>
+<span class="n">array</span><span class="p">([[</span><span class="mf">42.</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">float32</span><span class="p">)</span>
+</pre></div>
+
+
+<p>Looks good so far. How about we run it on a PySpark executor instead of the
+driver:</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">parallelize</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">numSlices</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span><span class="o">.</span><span class="n">foreachPartition</span><span class="p">(</span>
+<span class="o">...</span>     <span class="k">lambda</span> <span class="n">_</span><span class="p">:</span> <span class="n">tf</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">identity</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">feature_columns</span><span class="p">)))</span>
+<span class="n">org</span><span class="o">.</span><span class="n">apache</span><span class="o">.</span><span class="n">spark</span><span class="o">.</span><span class="n">api</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">PythonException</span><span class="p">:</span>
+<span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+  <span class="n">File</span> <span class="s2">&quot;&lt;stdin&gt;&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">2</span><span class="p">,</span> <span class="ow">in</span> <span class="n">identity</span>
+  <span class="n">File</span> <span class="s2">&quot;[...]/tensorflow/python/feature_column/feature_column.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">280</span><span class="p">,</span> <span class="ow">in</span> <span class="n">input_layer</span>
+    <span class="n">trainable</span><span class="p">,</span> <span class="n">cols_to_vars</span><span class="p">)</span>
+  <span class="n">File</span> <span class="s2">&quot;[...]/tensorflow/python/feature_column/feature_column.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">170</span><span class="p">,</span> <span class="ow">in</span> <span class="n">_internal_input_layer</span>
+    <span class="n">feature_columns</span> <span class="o">=</span> <span class="n">_clean_feature_columns</span><span class="p">(</span><span class="n">feature_columns</span><span class="p">)</span>
+  <span class="n">File</span> <span class="s2">&quot;[...]/tensorflow/python/feature_column/feature_column.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">2027</span><span class="p">,</span> <span class="ow">in</span> <span class="n">_clean_feature_columns</span>
+    <span class="s1">&#39;Given (type {}): {}.&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">column</span><span class="p">),</span> <span class="n">column</span><span class="p">))</span>
+<span class="ne">ValueError</span><span class="p">:</span> <span class="n">Items</span> <span class="n">of</span> <span class="n">feature_columns</span> <span class="n">must</span> <span class="n">be</span> <span class="n">a</span> <span class="n">_FeatureColumn</span><span class="o">.</span> <span class="n">Given</span> <span class="p">(</span><span class="nb">type</span> <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="s1">&#39;&gt;): _NumericColumn(key=&#39;</span><span class="n">x</span><span class="s1">&#39;, shape=(1,), default_value=None, dtype=tf.float32, normalizer_fn=None).</span>
+</pre></div>
+
+
+<p>Ouch! What happened? Is it a bug in TensorFlow? The name <code>_NumericColumn</code> does
+sound a lot like <code>_FeatureColumn</code>... and this <code>collections</code> module looks oddly
+familiar! Well, enough with the guessing, let's see what <code>isinstance</code> has to
+say.</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="k">def</span> <span class="nf">check_feature_columns</span><span class="p">(</span><span class="n">feature_columns</span><span class="p">):</span>
+<span class="o">...</span>     <span class="kn">from</span> <span class="nn">tensorflow.python.feature_column</span> <span class="kn">import</span> <span class="n">feature_column</span> <span class="k">as</span> <span class="n">fc</span>
+<span class="o">...</span>     <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">fc</span><span class="o">.</span><span class="n">_FeatureColumn</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">feature_columns</span><span class="p">)</span>
+<span class="o">...</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">check_feature_columns</span><span class="p">(</span><span class="n">feature_columns</span><span class="p">)</span>
+<span class="bp">True</span>
+</pre></div>
+
+
+<p>Not much, but then <a href="https://superbobry.github.io/pyspark-silently-breaks-your-namedtuples.html">last time</a> we saw that the code working
+flawlessly on the driver might fail having crossed the serialization
+boundary. Therefore, to be absolutely sure we need to check on the executors as
+well.</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="n">rdd</span><span class="o">.</span><span class="n">mapPartitions</span><span class="p">(</span><span class="k">lambda</span> <span class="n">_</span><span class="p">:</span> <span class="p">[</span><span class="n">check_feature_columns</span><span class="p">(</span><span class="n">feature_columns</span><span class="p">)])</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="p">[</span><span class="bp">False</span><span class="p">,</span> <span class="bp">False</span><span class="p">]</span>
+</pre></div>
+
+
+<p>And of course, this is where things get interesting. The <code>_NumericColumn</code> is a
+<code>_FeatureColumn</code> on the driver, but not so on the executors. The namedtuple
+patch strikes again!</p>
+<h3>Sidenote</h3>
+<p>TensorFlowOnSpark encourages the users to do all the imports/model definition in
+a function (see the MNIST <a href="https://github.com/yahoo/TensorFlowOnSpark/blob/bc8bddd5d4f12665d8c9a5195ba6631eacaed7af/examples/mnist/tf/mnist_dist.py#L15">example</a>). This ensures that
+TensorFlow objects do not accidentally cross the serialization boundary as part
+of the closure. Therefore, the issue we have encountered is a bit artificial and
+(probably) hard to come by in real TensorFlowOnSpark code.</p>
+<h2>The patch revisited</h2>
+<p>Before we move on, a quick summary of the findings from last time:</p>
+<ul>
+<li>The goal of the patch is to make all namedtuples pickleable in a format which
+  would allow the executors to reconstruct the namedtuple definition even if the
+  namedtuple has been defined in the REPL, <em>aka</em> the interactive shell.</li>
+<li>The patch equally affects user-defined namedtuples and the ones used by the
+  standard/third-party libraries.</li>
+<li>By default all classes are pickled using the name of the class and the
+  instance dict. The patch ensures that all namedtuple classes override this
+  behaviour and additionally pickle the structure of the namedtuple.</li>
+</ul>
+<p>Back to <code>_NumericColumn</code>. A lot of TensorFlow classes, <code>_NumericColumn</code>
+<a href="https://github.com/tensorflow/tensorflow/blob/f47b6c9ec5e6c4561a6ed97ef2342ea737dcd80c/tensorflow/python/feature_column/feature_column.py#L2031">included</a>, inherit from <code>collections.namedtuple</code> to reduce the
+boilerplate in class definitions. You could see a trace of this in the
+<a href="http://python-history.blogspot.fr/2010/06/method-resolution-order.html">method resolution order</a> <em>aka</em> the MRO</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="n">fc</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="o">.</span><span class="n">mro</span><span class="p">()</span>
+<span class="p">[</span><span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">tensorflow</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="s1">&#39;&gt;,</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">tensorflow</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">_DenseColumn</span><span class="s1">&#39;&gt;,</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">tensorflow</span><span class="o">.</span><span class="n">python</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">feature_column</span><span class="o">.</span><span class="n">_FeatureColumn</span><span class="s1">&#39;&gt;,</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="s1">&#39;&gt;,</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">tuple</span><span class="s1">&#39;&gt;,  # !</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">object</span><span class="s1">&#39;&gt;]</span>
+</pre></div>
+
+
+<p>This alone, however, does not break the inheritance relation between
+<code>_NumericColumn</code> and <code>_FeatureColumn</code>, which is clearly present in the
+MRO for the driver version of the class. What does break it, is the custom
+pickling behaviour added by PySpark.</p>
+<p>Think about what happens when an instance of <code>_NumericColumn</code> is pickled. The
+<code>pickle</code> implementation would attempt to lookup the <code>__reduce__</code> method in the
+<code>_NumericColumn</code> hierarchy. To do this, it would traverse the hierarchy in MRO
+and stop at the first class defining the method. The MRO for <code>_NumericColumn</code>
+contains two eligible classes:</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="p">[</span><span class="bp">cls</span> <span class="k">for</span> <span class="bp">cls</span> <span class="ow">in</span> <span class="n">fc</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="o">.</span><span class="n">mro</span><span class="p">()</span> <span class="k">if</span> <span class="s2">&quot;__reduce__&quot;</span> <span class="ow">in</span> <span class="nb">vars</span><span class="p">(</span><span class="bp">cls</span><span class="p">)]</span>
+<span class="p">[</span><span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="s1">&#39;&gt;,</span>
+ <span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">object</span><span class="s1">&#39;&gt;]</span>
+</pre></div>
+
+
+<p>However, since <code>collections._NumericColumn</code> is before <code>object</code> in the MRO,
+pickle would always use its<code>__reduce__</code> implementation and <strong>not</strong> the default
+one in <code>object</code>. Note also that <code>collections._NumericColumn.__reduce__</code> has no
+idea about the lower levels of the hierarchy it is part of, and will therefore
+try to pickle the instance as if it was just a <code>collections._NumericColumn</code>.</p>
+<div class="highlight"><pre><span></span><span class="o">&gt;&gt;&gt;</span> <span class="n">serialized</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="o">*</span><span class="n">feature_columns</span><span class="p">)</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="nb">type</span><span class="p">(</span><span class="n">pickle</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">serialized</span><span class="p">))</span>
+<span class="o">&lt;</span><span class="k">class</span> <span class="err">&#39;</span><span class="nc">collections</span><span class="o">.</span><span class="n">_NumericColumn</span><span class="s1">&#39;&gt;  # Not ``fc._NumericColumn``!</span>
+</pre></div>
+
+
+<p>This is exactly what is happening when the <code>feature_columns</code> are serialized
+to be passed to <code>check_feature_columns</code>. Hopefully, now the <code>False</code> we got
+as a result of running <code>check_feature_columns</code> on the executors makes sense.</p>
+<h2>Reverting the patch step-by-step</h2>
+<p>The dynamic nature of Python makes even the wildest dreams possible (which in
+part explains the existence of the patch in question). Specifically, it allows
+us to revert the patch the same way it was applied.</p>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">collections</span>
+
+<span class="kn">import</span> <span class="nn">pyspark</span>  <span class="c1"># Force the patch.</span>
+
+<span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="vm">__code__</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span><span class="o">.</span><span class="vm">__code__</span>
+<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="n">__hijack</span>
+<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span>
+<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple_kwdefaults</span>
+</pre></div>
+
+
+<p>Caveats:</p>
+<ul>
+<li>The revert needs to be executed both on the driver and on the executors.</li>
+<li>Any namedtuples defined prior to executing the revert will need to be
+  postprocessed manually by removing the <code>__reduce__</code> method and setting
+  <code>__module__</code> to the correct value. Therefore, it is crucial to apply
+  the revert  <strong>before</strong> importing any standard library/third-party code
+  involving namedtuples.</li>
+<li>After the revert has been applied, the driver would not be able to unpickle
+  the namedtuples defined in the REPL.</li>
+</ul>
+<h2>Conclusion</h2>
+<p>The namedtuple patch in PySpark is not pretty. Designed to fix pickling
+of namedtuples defined in the REPL, it does more than that, and
+is in fact capable of causing unexpected, hard to diagnose failures in
+PySpark applications that use namedtuples, as we have seen in the case of
+TensorFlow feature columns.</p>
+<p>If you have experienced similar issues with PySpark, feel free to share
+them in the relevant <a href="https://issues.apache.org/jira/browse/SPARK-22674">ticket</a> on the Spark JIRA.</p>
+<p><a href="https://www.reddit.com/r/apachespark/comments/84hb38/tensorflowonspark_or_the_namedtuple_patch_strikes/">Discussion</a> on /r/apachespark.</p>
+  </div>
+  <div class="tag-cloud">
+    <p>
+      <a href="https://superbobry.github.io/tag/spark.html">spark</a>
+      <a href="https://superbobry.github.io/tag/tensorflow.html">tensorflow</a>
+      <a href="https://superbobry.github.io/tag/python.html">python</a>
+      <a href="https://superbobry.github.io/tag/rant.html">rant</a>
+    </p>
+  </div>
+
+
+
+
+<div id="disqus_thread"></div>
+<script type="text/javascript">
+    var disqus_shortname = 'superbobry';
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>
+        Please enable JavaScript to view comments.
+
+</noscript>
+</article>
+
+    <footer>
+<p>
+  &copy; Sergei Lebedev 2018 - This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>
+</p>
+<p>    Powered by <a href="http://getpelican.com" target="_blank">Pelican</a> - <a href="https://github.com/alexandrevicenzi/flex" target="_blank">Flex</a> theme by <a href="http://alexandrevicenzi.com" target="_blank">Alexandre Vicenzi</a>
+</p><p>
+  <a rel="license"
+     href="http://creativecommons.org/licenses/by-sa/4.0/"
+     target="_blank">
+    <img alt="Creative Commons License"
+         title="Creative Commons License"
+         style="border-width:0"
+         src="https://i.creativecommons.org/l/by-sa/4.0/80x15.png"
+         width="80"
+         height="15"/>
+  </a>
+</p>    </footer>
+  </main>
+
+
+
+
+
+<script type="application/ld+json">
+{
+  "@context" : "http://schema.org",
+  "@type" : "Blog",
+  "name": " The blog ",
+  "url" : "https://superbobry.github.io",
+  "image": "static/picture.jpg",
+  "description": "Sergei Lebedev's Thoughts and Writings"
+}
+</script>
+</body>
+</html>
