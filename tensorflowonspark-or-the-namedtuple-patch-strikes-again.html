@@ -252,14 +252,13 @@ as a result of running <code>check_feature_columns</code> on the executors makes
 <p>The dynamic nature of Python makes even the wildest dreams possible (which in
 part explains the existence of the patch in question). Specifically, it allows
 us to revert the patch the same way it was applied.</p>
-<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">collections</span>
-
-<span class="kn">import</span> <span class="nn">pyspark</span>  <span class="c1"># Force the patch.</span>
-
-<span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="vm">__code__</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span><span class="o">.</span><span class="vm">__code__</span>
-<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="n">__hijack</span>
-<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span>
-<span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple_kwdefaults</span>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">revert_namedtuple_patch</span><span class="p">():</span>
+    <span class="kn">import</span> <span class="nn">pyspark</span>  <span class="c1"># Force the patch.</span>
+    <span class="kn">import</span> <span class="nn">collections</span>
+    <span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="vm">__code__</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span><span class="o">.</span><span class="vm">__code__</span>
+    <span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">namedtuple</span><span class="o">.</span><span class="n">__hijack</span>
+    <span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple</span>
+    <span class="k">del</span> <span class="n">collections</span><span class="o">.</span><span class="n">_old_namedtuple_kwdefaults</span>
 </pre></div>
 
 
